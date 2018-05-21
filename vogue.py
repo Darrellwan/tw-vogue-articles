@@ -1,17 +1,15 @@
 import csv
 import json
 import queue
+import random
 import re
 import sqlite3
 import threading
 import time
 import atexit
-from pprint import pprint
 
 import requests
 from bs4 import BeautifulSoup, SoupStrainer
-
-# VOGUE_CATEGORY_LIST_TEST = ["https://www.vogue.com.tw/jewelry/special"]
 
 VOGUE_CATEGORY_LIST = ["https://www.vogue.com.tw/mobile/beauty/list.asp",
                        "https://www.vogue.com.tw/mobile/culture/list.asp",
@@ -23,7 +21,7 @@ VOGUE_CATEGORY_LIST = ["https://www.vogue.com.tw/mobile/beauty/list.asp",
                        "https://www.vogue.com.tw/mobile/vogue_talk/list.asp"]
 VOGUE_CATEGORY_JSON = "vogue_category.json"
 VOGUE_ARTICLES_CSV = "vogue_articles.csv"
-THREADLIMIT = 10
+THREADLIMIT = 3
 
 
 def execute_db(fname, sql_cmd, articles):
@@ -58,7 +56,11 @@ def link_to_url(url):
 
 
 def link_to_url_part(url):
-    page = requests.get(url)
+    ip = pick_random_ip()
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                             'AppleWebKit/537.36 (KHTML, like Gecko) '
+                             'Chrome/59.0.3071.115 Safari/537.36'}
+    page = requests.get(url, proxies={'http': 'http://' + ip}, headers=headers)
     page.encoding = 'utf-8'
     if page.status_code != 200:
         return None
@@ -66,6 +68,12 @@ def link_to_url_part(url):
         strainer = SoupStrainer("header", "title")
         this_soup = BeautifulSoup(page.text, 'html.parser', parse_only=strainer)
         return this_soup
+
+
+def pick_random_ip():
+    proxy_ips = ['121.40.199.105:80', '122.49.35.168:33128']
+    ip = random.choice(proxy_ips)
+    return ip
 
 
 def encode_latin_to_utf(title_str):
@@ -204,7 +212,7 @@ def start_crawler(*args):
 
 
 def exit_handler():
-    # save_db_csv()
+    trigger_save_db_csv()
     print('My application is ending!')
 
 
@@ -224,32 +232,18 @@ def save_db_csv():
 
     print('save_db_csv')
     try:
-        # cmd = 'INSERT INTO vouge_articles (title, author, create_date, link, category) VALUES ("%s", "%s", "%s", "%s", "%s")' % (
-        # article["title"], article["author"], article["time"], article["url"], article["category"])
         cmd = "insert into vouge_articles(title, author, create_date, link, category) values (:title, :author, :time, :url, :category)"
         execute_db(db_name, cmd, article_result)
         article_result = []
     except:
         pass
 
-    # with open(VOGUE_ARTICLES_CSV, 'w', encoding='utf-8', newline='') as f:
-    #     writer = csv.writer(f, delimiter=',')
-    #     writer.writerow(('標題', '作者', '日期', '網址'))
-    #     for article in article_result:
-    #         writer.writerow(article.values())
-
 
 def get_articles():
     global db_name
     sql = "SELECT * FROM vouge_articles WHERE (author LIKE \"%Minnie%\" OR author LIKE \"%minnie%\") OR (author = \"Sun\" OR author = \"sun\" OR author = \"Fairy Sun\" OR author = \"Sun Fairy\"  ) GROUP BY title ORDER BY create_date DESC"
     rows = select_db(db_name, sql)
-    print(len(rows))
-    with open('minnie_vogue.csv', 'w', encoding='utf-8', newline='') as f:
-        writer = csv.writer(f, delimiter=",")
-        writer.writerow(('Key', 'title', 'author', 'create_date', 'link', 'category'))
-        for row in rows:
-            print(row)
-            writer.writerow((column for column in row))
+    return rows
 
 
 if __name__ == '__main__':
@@ -257,11 +251,7 @@ if __name__ == '__main__':
 
     atexit.register(exit_handler)
     start_time = time.time()
-    category_lists = open_json(VOGUE_CATEGORY_JSON)
-
-    if not category_lists or len(category_lists) == 0:
-        index = 0
-        category_lists = find_category_each(index)
+    category_lists = find_category_each(0)
 
     article_total = 1
     for category in category_lists:
@@ -270,7 +260,7 @@ if __name__ == '__main__':
             article_total = category_count
 
     db_current_index = 0
-    cmd = 'SELECT * FROM vouge_articles order by key DESC LIMIT 1'
+    cmd = 'SELECT * FROM vouge_articles order by create_date DESC LIMIT 1'
     for row in select_db(db_name, cmd):
         db_url = row[4]
         db_current_index = int(db_url.split("-")[1].replace(".html", "")) - 1
@@ -279,13 +269,12 @@ if __name__ == '__main__':
     total_count = 0
     que = queue.Queue(0)
 
-    current_index = int(article_total)
+    limit = 0
     if db_current_index > 0:
-        current_index = db_current_index
+        limit = db_current_index
 
-    # current_index = 39493
-    while current_index > 0:
-        # https://www.vogue.com.tw/mobile/beauty/content-39982.html
+    current_index = int(article_total)
+    while current_index > limit:
         article_mobile_url = "https://www.vogue.com.tw/mobile/beauty/content-%s.html" % (current_index)
         que.put(voguePage(article_mobile_url))
         current_index -= 1
